@@ -22,10 +22,18 @@ use rand::Rng;
 
 use crate::{
     cgroup::create_cgroup,
-    db::{used_ip_address_key, veth_ip_address_key, DB},
+    db::{
+        container_command_key, container_image_name_key, used_ip_address_key, veth_ip_address_key,
+    },
     image::download_image_if_needed,
     network::{delete_netns, run_in_network_namespace, setup_netns, setup_veths},
 };
+
+struct Container {
+    id: String,
+    image_name: String,
+    command: String,
+}
 
 pub async fn run_container(
     mem: Option<String>,
@@ -38,7 +46,7 @@ pub async fn run_container(
 ) -> Result<()> {
     let container_id = create_container_id();
     let (image_hash, manifest) =
-        download_image_if_needed(image_name, registry_username, registry_password).await?;
+        download_image_if_needed(&image_name, registry_username, registry_password).await?;
     create_container_directories(&container_id)?;
     mount_overlay_fs(&manifest, &container_id, &image_hash)?;
     setup_netns(&container_id).await?;
@@ -80,14 +88,21 @@ pub async fn run_container(
         | CloneFlags::CLONE_NEWIPC;
     let pid = clone(cb, &mut *stack, clone_flags, Some(Signal::SIGCHLD as i32))
         .with_context(|| "fialed to clone")?;
+
+    let db = sled::open(ROCKER_DB_PATH).unwrap();
+    db.insert(container_command_key(&container_id), command.as_str())?;
+    db.insert(container_image_name_key(&container_id), image_name.as_str())?;
+    drop(db);
+
     create_cgroup(&container_id, pid.as_raw() as u32, mem, cpus, pids);
     waitpid(pid, None)?;
     println!("Container {} done", &container_id);
 
     umount_container_fs(&mnt_path).unwrap();
 
-    let db = DB.lock().unwrap();
-    let res = db.get(veth_ip_address_key(&format!(
+    let db = sled::open(ROCKER_DB_PATH).unwrap();
+
+    let res = db.remove(veth_ip_address_key(&format!(
         "ns-veth-{}",
         &container_id[0..6]
     )))?;
@@ -97,6 +112,11 @@ pub async fn run_container(
             &container_id[0..6]
         )));
     }
+    let ip_addr = String::from_utf8(res.unwrap().to_vec()).unwrap();
+
+    db.remove(used_ip_address_key(&ip_addr))?;
+    db.remove(container_command_key(&container_id))?;
+    db.remove(container_image_name_key(&container_id))?;
 
     delete_netns(&container_id).await?;
     umount_overlay_fs(&container_id)?;
@@ -239,4 +259,47 @@ fn umount_container_fs(container_mount_path: &str) -> Result<()> {
     umount(Path::new(&format!("{}/proc", &container_mount_path))).unwrap();
     umount(Path::new(&format!("{}/tmp", &container_mount_path))).unwrap();
     Ok(())
+}
+
+pub fn print_running_containers() -> Result<()> {
+    println!("CONTAINER ID\tIMAGE\tCOMMAND");
+
+    for container in fetch_running_containers()? {
+        println!(
+            "{}\t{}\t{}",
+            container.id, container.image_name, container.command
+        );
+    }
+
+    Ok(())
+}
+
+fn fetch_running_containers() -> Result<Vec<Container>> {
+    let mut containers = Vec::new();
+
+    let db = sled::open(ROCKER_DB_PATH)?;
+    for entry in fs::read_dir(ROCKER_CONTAINERS_PATH)? {
+        let path = entry?.path();
+        let container_id = path.file_name().unwrap().to_string_lossy().to_string();
+
+        let command_res = db
+            .get(container_command_key(&container_id))
+            .unwrap()
+            .unwrap();
+        let command = String::from_utf8(command_res.to_vec()).unwrap();
+
+        let image_name_res = db
+            .get(container_image_name_key(&container_id))
+            .unwrap()
+            .unwrap();
+        let image_name = String::from_utf8(image_name_res.to_vec()).unwrap();
+
+        containers.push(Container {
+            id: container_id,
+            image_name: image_name,
+            command: command,
+        })
+    }
+
+    Ok(containers)
 }

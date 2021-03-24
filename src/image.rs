@@ -1,7 +1,4 @@
-use super::{
-    db::{image_hash_key, DB},
-    ROCKER_DB_PATH, ROCKER_IMAGES_PATH, ROCKER_TMP_PATH,
-};
+use super::{db::image_hash_key, ROCKER_DB_PATH, ROCKER_IMAGES_PATH, ROCKER_TMP_PATH};
 use std::{fs, io::Write, net::ToSocketAddrs};
 
 use anyhow::{anyhow, Result};
@@ -14,7 +11,7 @@ use futures::{future::join_all, join};
 use tar::Archive;
 
 pub async fn download_image_if_needed(
-    image_name: String,
+    image_name: &str,
     username: Option<String>,
     password: Option<String>,
 ) -> Result<(String, ManifestSchema2)> {
@@ -40,14 +37,13 @@ pub async fn download_image_if_needed(
 
     let image_hash = s2_manifest.manifest_spec.config().digest[7..=18].to_string();
 
-    let db = DB.lock().unwrap();
+    let db = sled::open(ROCKER_DB_PATH).unwrap();
     if (!is_image_already_downloaded(&db, &image_hash)?) {
         let image_layer_digests = s2_manifest.get_layers();
         println!("Downloading image {}:{}...", image_name, tag);
 
         download_image(&dclient, &image_name, &image_hash, &image_layer_digests).await?;
         db.insert(image_hash_key(&image_hash), "1")?;
-        db.flush();
     } else {
         println!("Image already exists");
     }

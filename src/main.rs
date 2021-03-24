@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use clap::Clap;
+use container::{print_running_containers, run_container};
 use network::{is_network_bridge_up, setup_network_bridge};
-use run::run_container;
 use std::{
     fs::{self, OpenOptions},
     path::Path,
@@ -17,12 +17,12 @@ const ROCKER_NETWORK_ADDRESS: &str = "172.28.0.0/16";
 const ROCKER_BRIDGE_ADDRESS: &str = "172.28.0.1";
 
 mod cgroup;
+mod container;
 mod db;
 mod dbus_systemd;
 mod fork;
 mod image;
 mod network;
-mod run;
 
 #[derive(Clap)]
 struct Opts {
@@ -87,6 +87,7 @@ fn main() -> Result<()> {
             };
             rt.block_on(task)?
         }
+        SubCommand::Ps => print_running_containers()?,
         _ => (),
     };
 
