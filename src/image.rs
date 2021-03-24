@@ -1,4 +1,7 @@
-use super::{db::image_hash_key, ROCKER_DB_PATH, ROCKER_IMAGES_PATH, ROCKER_TMP_PATH};
+use super::{
+    container::fetch_running_containers, db::downloaded_images_key, ROCKER_DB_PATH,
+    ROCKER_IMAGES_PATH, ROCKER_TMP_PATH,
+};
 use std::{fs, io::Write, net::ToSocketAddrs};
 
 use anyhow::{anyhow, Result};
@@ -50,7 +53,7 @@ pub async fn download_image_if_needed(
 
         download_image(&dclient, &image_name, &image_hash, &image_layer_digests).await?;
         db.insert(
-            image_hash_key(&image_hash),
+            downloaded_images_key(&image_hash),
             format!("{}:{}", &image_name, &tag).as_str(),
         )?;
     } else {
@@ -61,7 +64,7 @@ pub async fn download_image_if_needed(
 }
 
 fn is_image_already_downloaded(image_hash_table: &sled::Tree, image_hash: &str) -> Result<bool> {
-    match image_hash_table.get(image_hash_key(image_hash))? {
+    match image_hash_table.get(downloaded_images_key(image_hash))? {
         Some(_) => Ok(true),
         None => Ok(false),
     }
@@ -185,7 +188,7 @@ fn fetch_available_images() -> Result<Vec<Image>> {
         let path = entry?.path();
         let image_hash = path.file_name().unwrap().to_string_lossy().to_string();
 
-        let image_name_and_tag_res = db.get(image_hash_key(&image_hash)).unwrap().unwrap();
+        let image_name_and_tag_res = db.get(downloaded_images_key(&image_hash)).unwrap().unwrap();
         let image_name_and_tag = String::from_utf8(image_name_and_tag_res.to_vec()).unwrap();
         let image_name_and_tag: Vec<&str> = image_name_and_tag.split(":").collect();
 
@@ -197,4 +200,20 @@ fn fetch_available_images() -> Result<Vec<Image>> {
     }
 
     Ok(images)
+}
+
+pub fn delete_image(image_hash: &str) -> Result<()> {
+    let mut is_used_by_container = false;
+    for container in fetch_running_containers()? {
+        if (container.image_hash == image_hash) {
+            println!("image is being used by running container: {}", container.id);
+            return Ok(());
+        }
+    }
+
+    fs::remove_dir_all(format!("{}/{}", ROCKER_IMAGES_PATH, image_hash))?;
+
+    let db = sled::open(ROCKER_DB_PATH)?;
+    db.remove(downloaded_images_key(image_hash))?;
+    Ok(())
 }

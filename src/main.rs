@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use clap::Clap;
 use container::{print_running_containers, run_container};
-use image::print_available_images;
+use image::{delete_image, print_available_images};
 use network::{is_network_bridge_up, setup_network_bridge};
 use std::{
     fs::{self, OpenOptions},
@@ -37,7 +37,7 @@ enum SubCommand {
     Ps,
     Exec,
     Images,
-    Rmi,
+    Rmi(Rmi),
 }
 
 #[derive(Clap)]
@@ -54,6 +54,11 @@ struct Run {
     password: Option<String>,
     image_name: String,
     command: String,
+}
+
+#[derive(Clap)]
+struct Rmi {
+    image_hash: String,
 }
 
 fn main() -> Result<()> {
@@ -90,6 +95,7 @@ fn main() -> Result<()> {
         }
         SubCommand::Ps => print_running_containers()?,
         SubCommand::Images => print_available_images()?,
+        SubCommand::Rmi(r) => delete_image(&r.image_hash)?,
         _ => (),
     };
 

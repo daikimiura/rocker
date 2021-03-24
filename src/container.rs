@@ -23,16 +23,18 @@ use rand::Rng;
 use crate::{
     cgroup::create_cgroup,
     db::{
-        container_command_key, container_image_name_key, used_ip_address_key, veth_ip_address_key,
+        container_commands_key, container_image_hashes_key, downloaded_images_key,
+        used_ip_addresses_key, veth_ip_addresses_key,
     },
-    image::download_image_if_needed,
+    image::{self, download_image_if_needed},
     network::{delete_netns, run_in_network_namespace, setup_netns, setup_veths},
 };
 
-struct Container {
-    id: String,
-    image_name: String,
-    command: String,
+pub struct Container {
+    pub id: String,
+    pub image_name: String,
+    pub image_hash: String,
+    pub command: String,
 }
 
 pub async fn run_container(
@@ -90,8 +92,11 @@ pub async fn run_container(
         .with_context(|| "fialed to clone")?;
 
     let db = sled::open(ROCKER_DB_PATH).unwrap();
-    db.insert(container_command_key(&container_id), command.as_str())?;
-    db.insert(container_image_name_key(&container_id), image_name.as_str())?;
+    db.insert(container_commands_key(&container_id), command.as_str())?;
+    db.insert(
+        container_image_hashes_key(&container_id),
+        image_hash.as_str(),
+    )?;
     drop(db);
 
     create_cgroup(&container_id, pid.as_raw() as u32, mem, cpus, pids);
@@ -102,7 +107,7 @@ pub async fn run_container(
 
     let db = sled::open(ROCKER_DB_PATH).unwrap();
 
-    let res = db.remove(veth_ip_address_key(&format!(
+    let res = db.remove(veth_ip_addresses_key(&format!(
         "ns-veth-{}",
         &container_id[0..6]
     )))?;
@@ -114,9 +119,9 @@ pub async fn run_container(
     }
     let ip_addr = String::from_utf8(res.unwrap().to_vec()).unwrap();
 
-    db.remove(used_ip_address_key(&ip_addr))?;
-    db.remove(container_command_key(&container_id))?;
-    db.remove(container_image_name_key(&container_id))?;
+    db.remove(used_ip_addresses_key(&ip_addr))?;
+    db.remove(container_commands_key(&container_id))?;
+    db.remove(container_image_hashes_key(&container_id))?;
 
     delete_netns(&container_id).await?;
     umount_overlay_fs(&container_id)?;
@@ -262,7 +267,7 @@ fn umount_container_fs(container_mount_path: &str) -> Result<()> {
 }
 
 pub fn print_running_containers() -> Result<()> {
-    println!("CONTAINER ID\tIMAGE\tCOMMAND");
+    println!("CONTAINER ID\tIMAGE\t\tCOMMAND");
 
     for container in fetch_running_containers()? {
         println!(
@@ -274,7 +279,7 @@ pub fn print_running_containers() -> Result<()> {
     Ok(())
 }
 
-fn fetch_running_containers() -> Result<Vec<Container>> {
+pub fn fetch_running_containers() -> Result<Vec<Container>> {
     let mut containers = Vec::new();
 
     let db = sled::open(ROCKER_DB_PATH)?;
@@ -283,20 +288,25 @@ fn fetch_running_containers() -> Result<Vec<Container>> {
         let container_id = path.file_name().unwrap().to_string_lossy().to_string();
 
         let command_res = db
-            .get(container_command_key(&container_id))
+            .get(container_commands_key(&container_id))
             .unwrap()
             .unwrap();
         let command = String::from_utf8(command_res.to_vec()).unwrap();
 
-        let image_name_res = db
-            .get(container_image_name_key(&container_id))
+        let image_hash_res = db
+            .get(container_image_hashes_key(&container_id))
             .unwrap()
             .unwrap();
-        let image_name = String::from_utf8(image_name_res.to_vec()).unwrap();
+        let image_hash = String::from_utf8(image_hash_res.to_vec()).unwrap();
+
+        let image_name_and_tag_res = db.get(downloaded_images_key(&image_hash)).unwrap().unwrap();
+        let image_name_and_tag = String::from_utf8(image_name_and_tag_res.to_vec()).unwrap();
+        let image_name_and_tag: Vec<&str> = image_name_and_tag.split(":").collect();
 
         containers.push(Container {
             id: container_id,
-            image_name: image_name,
+            image_hash: image_hash,
+            image_name: image_name_and_tag[0].to_string(),
             command: command,
         })
     }

@@ -41,7 +41,7 @@ use rtnetlink::{
 use tokio::{runtime::Runtime, task::spawn_blocking};
 
 use crate::{
-    db::{used_ip_address_key, veth_ip_address_key},
+    db::{used_ip_addresses_key, veth_ip_addresses_key},
     fork::fork_fn,
     ROCKER_BRIDGE_ADDRESS, ROCKER_BRIDGE_NAME, ROCKER_DB_PATH, ROCKER_NETNS_PATH,
     ROCKER_NETWORK_ADDRESS,
@@ -181,7 +181,7 @@ pub async fn setup_veths(container_id: &String) -> Result<()> {
     );
 
     db.insert(
-        veth_ip_address_key(&format!("ns-veth-{}", container_id[0..6].to_string())),
+        veth_ip_addresses_key(&format!("ns-veth-{}", container_id[0..6].to_string())),
         ip_addr.to_string().as_str(),
     )?;
 
@@ -352,14 +352,14 @@ fn create_ip_address(handle: &Handle, db: &sled::Db) -> Result<IpAddr> {
     let mut rand_nums = rand::thread_rng().gen::<[u8; 2]>();
     let mut new_addr: IpAddr = format!("172.28.{}.{}", rand_nums[0], rand_nums[1]).parse()?;
     while (!is_ok) {
-        match db.get(used_ip_address_key(&new_addr.to_string()))? {
+        match db.get(used_ip_addresses_key(&new_addr.to_string()))? {
             Some(_) => {
                 println!("IP address: {} is already in use", new_addr.to_string());
                 rand_nums = rand::thread_rng().gen::<[u8; 2]>();
                 new_addr = format!("172.28.{}.{}", rand_nums[0], rand_nums[1]).parse()?;
             }
             None => {
-                db.insert(used_ip_address_key(&new_addr.to_string()), "1")?;
+                db.insert(used_ip_addresses_key(&new_addr.to_string()), "1")?;
                 is_ok = true;
             }
         };
