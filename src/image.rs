@@ -10,6 +10,12 @@ use flate2::read::GzDecoder;
 use futures::{future::join_all, join};
 use tar::Archive;
 
+struct Image {
+    image_hash: String,
+    name: String,
+    tag: String,
+}
+
 pub async fn download_image_if_needed(
     image_name: &str,
     username: Option<String>,
@@ -43,7 +49,10 @@ pub async fn download_image_if_needed(
         println!("Downloading image {}:{}...", image_name, tag);
 
         download_image(&dclient, &image_name, &image_hash, &image_layer_digests).await?;
-        db.insert(image_hash_key(&image_hash), "1")?;
+        db.insert(
+            image_hash_key(&image_hash),
+            format!("{}:{}", &image_name, &tag).as_str(),
+        )?;
     } else {
         println!("Image already exists");
     }
@@ -157,4 +166,35 @@ fn delete_temp_image_files(image_hash: &str) -> Result<()> {
     let path = format!("{}{}{}", ROCKER_TMP_PATH, "/", image_hash);
     fs::remove_dir_all(path)?;
     Ok(())
+}
+
+pub fn print_available_images() -> Result<()> {
+    println!("REPOSITORY\tTAG\tIMAGE ID");
+
+    for image in fetch_available_images()? {
+        println!("{}\t{}\t{}", image.name, image.tag, image.image_hash)
+    }
+    Ok(())
+}
+
+fn fetch_available_images() -> Result<Vec<Image>> {
+    let mut images = Vec::new();
+
+    let db = sled::open(ROCKER_DB_PATH)?;
+    for entry in fs::read_dir(ROCKER_IMAGES_PATH)? {
+        let path = entry?.path();
+        let image_hash = path.file_name().unwrap().to_string_lossy().to_string();
+
+        let image_name_and_tag_res = db.get(image_hash_key(&image_hash)).unwrap().unwrap();
+        let image_name_and_tag = String::from_utf8(image_name_and_tag_res.to_vec()).unwrap();
+        let image_name_and_tag: Vec<&str> = image_name_and_tag.split(":").collect();
+
+        images.push(Image {
+            image_hash: image_hash,
+            name: image_name_and_tag[0].to_string(),
+            tag: image_name_and_tag[1].to_string(),
+        })
+    }
+
+    Ok(images)
 }

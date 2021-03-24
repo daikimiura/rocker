@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use clap::Clap;
 use container::{print_running_containers, run_container};
+use image::print_available_images;
 use network::{is_network_bridge_up, setup_network_bridge};
 use std::{
     fs::{self, OpenOptions},
@@ -88,6 +89,7 @@ fn main() -> Result<()> {
             rt.block_on(task)?
         }
         SubCommand::Ps => print_running_containers()?,
+        SubCommand::Images => print_available_images()?,
         _ => (),
     };
 
