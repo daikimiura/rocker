@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{fs::OpenOptions, io::Write, time::Duration};
 
 use anyhow::{anyhow, Result};
 use dbus::{
@@ -33,6 +33,19 @@ pub fn create_cgroup(
     )?;
 
     Ok(())
+}
+
+pub fn add_process_to_cgroup(path: &str, pid: u32) -> Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .append(true)
+        .open(format!("{}/cgroup.procs", path))?;
+    write!(file, "{}", pid)?;
+    Ok(())
+}
+
+pub fn fetch_cgroup_path(container_id: &str) -> String {
+    format!("/sys/fs/cgroup/system.slice/rocker-{}.scope", container_id)
 }
 
 fn build_properties(

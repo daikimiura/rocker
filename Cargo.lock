@@ -1260,7 +1260,6 @@ dependencies = [
  "rtnetlink",
  "sled",
  "tar",
- "thiserror",
  "tokio 1.2.0",
 ]
 

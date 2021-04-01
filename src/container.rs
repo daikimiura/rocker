@@ -15,16 +15,16 @@ use nix::{
     mount::{umount, MsFlags},
     sched::{clone, setns, CloneFlags},
     sys::{signal::Signal, wait::waitpid},
-    unistd::{chdir, chroot, close, execv, sethostname},
+    unistd::{chdir, chroot, close, execv, getpid, sethostname},
     NixPath,
 };
 use rand::Rng;
 
 use crate::{
-    cgroup::create_cgroup,
+    cgroup::{add_process_to_cgroup, create_cgroup, fetch_cgroup_path},
     db::{
-        container_commands_key, container_image_hashes_key, downloaded_images_key,
-        used_ip_addresses_key, veth_ip_addresses_key,
+        container_commands_key, container_image_hashes_key, container_pids_key,
+        downloaded_images_key, used_ip_addresses_key, veth_ip_addresses_key,
     },
     image::{self, download_image_if_needed},
     network::{delete_netns, run_in_network_namespace, setup_netns, setup_veths},
@@ -60,14 +60,8 @@ pub async fn run_container(
     let mut stack = Box::new([0; CONTAINER_STACK_SIZE]);
 
     let cb = Box::new(|| {
-        let ns_path = format!("{}/{}", ROCKER_NETNS_PATH, &format!("ns-{}", &container_id));
-        let mut oflag = OFlag::empty();
-        oflag.insert(OFlag::O_RDONLY);
-        oflag.insert(OFlag::O_EXCL);
-
-        let fd = open(ns_path.as_str(), oflag, nix::sys::stat::Mode::empty()).unwrap();
-        setns(fd, CloneFlags::CLONE_NEWNET).unwrap();
-        close(fd).unwrap();
+        let netns_path = format!("{}/{}", ROCKER_NETNS_PATH, &format!("ns-{}", &container_id));
+        setns_by_fd_path(&netns_path, CloneFlags::CLONE_NEWNET);
 
         nix::unistd::sethostname(&container_id);
 
@@ -97,6 +91,7 @@ pub async fn run_container(
         container_image_hashes_key(&container_id),
         image_hash.as_str(),
     )?;
+    db.insert(container_pids_key(&container_id), pid.to_string().as_str());
     drop(db);
 
     create_cgroup(&container_id, pid.as_raw() as u32, mem, cpus, pids);
@@ -122,6 +117,7 @@ pub async fn run_container(
     db.remove(used_ip_addresses_key(&ip_addr))?;
     db.remove(container_commands_key(&container_id))?;
     db.remove(container_image_hashes_key(&container_id))?;
+    db.remove(container_pids_key(&container_id))?;
 
     delete_netns(&container_id).await?;
     umount_overlay_fs(&container_id)?;
@@ -312,4 +308,86 @@ pub fn fetch_running_containers() -> Result<Vec<Container>> {
     }
 
     Ok(containers)
+}
+
+pub fn exec_command_in_container(container_id: &str, command: &str) -> Result<()> {
+    let db = sled::open(ROCKER_DB_PATH)?;
+    let container_pid_res = db.get(container_pids_key(&container_id))?;
+    drop(db);
+
+    if (container_pid_res.is_none()) {
+        println!("container not found: {}", &container_id);
+        return Ok(());
+    }
+
+    let container_pid: u32 = String::from_utf8(container_pid_res.unwrap().to_vec())?.parse()?;
+
+    let mnt_path = format!("{}/{}/fs/mnt", ROCKER_CONTAINERS_PATH, &container_id);
+    const CONTAINER_STACK_SIZE: usize = 1024 * 1024;
+
+    let cb = Box::new(|| {
+        let ns_base_path = format!("/proc/{}/ns", &container_pid);
+        let ipcns_path = format!("{}/ipc", &ns_base_path);
+        let mntns_path = format!("{}/mnt", &ns_base_path);
+        let pidns_path = format!("{}/pid", &ns_base_path);
+        let utsns_path = format!("{}/uts", &ns_base_path);
+        let netns_path = format!("{}/{}", ROCKER_NETNS_PATH, &format!("ns-{}", &container_id));
+        setns_by_fd_path(&ipcns_path, CloneFlags::CLONE_NEWIPC);
+        setns_by_fd_path(&mntns_path, CloneFlags::CLONE_NEWNS);
+        setns_by_fd_path(&pidns_path, CloneFlags::CLONE_NEWPID);
+        setns_by_fd_path(&utsns_path, CloneFlags::CLONE_NEWUTS);
+        setns_by_fd_path(&netns_path, CloneFlags::CLONE_NEWNET);
+
+        let execv_cb = Box::new(|| {
+            nix::unistd::sethostname(&container_id).unwrap();
+            chroot(Path::new(&mnt_path)).unwrap();
+            chdir("/").unwrap();
+
+            execv(
+                &CString::new((&command).to_string()).unwrap(),
+                &[CString::new((&command).to_string()).unwrap()],
+            );
+            return 0;
+        });
+
+        let mut execv_stack = Box::new([0; CONTAINER_STACK_SIZE]);
+        let execv_pid = clone(
+            execv_cb,
+            &mut *execv_stack,
+            CloneFlags::empty(),
+            Some(Signal::SIGCHLD as i32),
+        )
+        .with_context(|| "fialed to clone")
+        .unwrap();
+
+        let cgroup_path = fetch_cgroup_path(container_id);
+        add_process_to_cgroup(&cgroup_path, execv_pid.as_raw() as u32).unwrap();
+        waitpid(execv_pid, None).unwrap();
+
+        return 0;
+    });
+
+    let mut stack = Box::new([0; CONTAINER_STACK_SIZE]);
+    let pid = clone(
+        cb,
+        &mut *stack,
+        CloneFlags::empty(),
+        Some(Signal::SIGCHLD as i32),
+    )
+    .with_context(|| "fialed to clone")?;
+
+    waitpid(pid, None)?;
+
+    Ok(())
+}
+
+fn setns_by_fd_path(path: &str, nstype: CloneFlags) -> Result<()> {
+    dbg!(path);
+    let mut oflag = OFlag::empty();
+    oflag.insert(OFlag::O_RDONLY);
+    oflag.insert(OFlag::O_EXCL);
+
+    let fd = open(path, oflag, nix::sys::stat::Mode::empty()).unwrap();
+    setns(fd, nstype).unwrap();
+    Ok(())
 }
