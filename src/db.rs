@@ -1,8 +1,3 @@
-use once_cell::sync::Lazy;
-use std::{net::IpAddr, sync::Mutex};
-
-use crate::ROCKER_DB_PATH;
-
 const DOWNLOADED_IMAGES_KEY_PREFIX: &str = "downloaded_images";
 const CONTAINER_COMMANDS_KEY_PREFIX: &str = "container_commands";
 const CONTAINER_IMAGE_HASHES_KEY_PREFIX: &str = "container_image_hashes";

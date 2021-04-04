@@ -1,30 +1,22 @@
 use std::{
-    convert::{TryFrom, TryInto},
-    fs::{File, OpenOptions},
+    fs::OpenOptions,
     net::{IpAddr, Ipv4Addr},
-    os::unix::prelude::{AsRawFd, IntoRawFd},
-    path::Path,
+    os::unix::prelude::IntoRawFd,
     process::exit,
-    sync::{Arc, Mutex},
+    sync::Arc,
     thread,
 };
 
-use futures::{
-    channel::mpsc::{UnboundedReceiver, UnboundedSender},
-    Future, Sink, Stream, TryStreamExt,
-};
+use futures::TryStreamExt;
 
 use anyhow::{anyhow, Result};
 use ipnetwork::IpNetwork;
 use nix::{
     self,
-    fcntl::{self, open, OFlag},
-    sched::{setns, unshare, CloneFlags},
-    sys::{
-        stat::Mode,
-        wait::{waitpid, WaitStatus},
-    },
-    unistd::{self, close, fork, ForkResult},
+    fcntl::{open, OFlag},
+    sched::{setns, CloneFlags},
+    sys::stat::Mode,
+    unistd::close,
 };
 use rand::Rng;
 use rtnetlink::{
@@ -34,11 +26,10 @@ use rtnetlink::{
             constants::{AF_BRIDGE, RTEXT_FILTER_BRVLAN},
             link::nlas::Nla,
         },
-        IFF_LOWER_UP, IFF_UP,
+        IFF_UP,
     },
     Handle, NetworkNamespace,
 };
-use tokio::{runtime::Runtime, task::spawn_blocking};
 
 use crate::{
     db::{used_ip_addresses_key, veth_ip_addresses_key},
@@ -85,7 +76,7 @@ pub async fn setup_network_bridge() -> Result<()> {
         .set_name_filter(ROCKER_BRIDGE_NAME.to_string())
         .execute();
 
-    if let Some(link) = links.try_next().await? {
+    if let Some(_link) = links.try_next().await? {
         set_link_up(&handle, &ROCKER_BRIDGE_NAME.to_string()).await?;
         return Ok(());
     };
@@ -347,11 +338,11 @@ pub fn run_in_network_namespace(
     )
 }
 
-fn create_ip_address(handle: &Handle, db: &sled::Db) -> Result<IpAddr> {
+fn create_ip_address(_handle: &Handle, db: &sled::Db) -> Result<IpAddr> {
     let mut is_ok = false;
     let mut rand_nums = rand::thread_rng().gen::<[u8; 2]>();
     let mut new_addr: IpAddr = format!("172.28.{}.{}", rand_nums[0], rand_nums[1]).parse()?;
-    while (!is_ok) {
+    while !is_ok {
         match db.get(used_ip_addresses_key(&new_addr.to_string()))? {
             Some(_) => {
                 println!("IP address: {} is already in use", new_addr.to_string());

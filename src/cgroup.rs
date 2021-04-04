@@ -5,7 +5,7 @@ use dbus::{
     arg::{self, Variant},
     blocking::Connection,
 };
-use nix::unistd::getpid;
+
 use regex::Regex;
 
 pub fn create_cgroup(
@@ -25,7 +25,7 @@ pub fn create_cgroup(
     use super::dbus_systemd::OrgFreedesktopSystemd1Manager;
 
     let properties = build_properties(target_pid, mem, cpus, pids, container_id)?;
-    let r = proxy.start_transient_unit(
+    let _r = proxy.start_transient_unit(
         &format!("rocker-{}.scope", container_id),
         "replace",
         properties,

@@ -3,10 +3,7 @@ use clap::Clap;
 use container::{exec_command_in_container, print_running_containers, run_container};
 use image::{delete_image, print_available_images};
 use network::{is_network_bridge_up, setup_network_bridge};
-use std::{
-    fs::{self, OpenOptions},
-    path::Path,
-};
+use std::fs::{self};
 
 const ROCKER_TMP_PATH: &str = "/var/lib/rocker/tmp";
 const ROCKER_IMAGES_PATH: &str = "/var/lib/rocker/images";
@@ -78,13 +75,11 @@ fn main() -> Result<()> {
 
     match opts.subcmd {
         SubCommand::Run(r) => {
-            let mut rt = tokio::runtime::Runtime::new()?;
+            let rt = tokio::runtime::Runtime::new()?;
 
             let task = async {
-                if let is_up = is_network_bridge_up().await? {
-                    if !is_up {
-                        setup_network_bridge().await?
-                    }
+                if !is_network_bridge_up().await? {
+                    setup_network_bridge().await?
                 };
                 run_container(
                     r.mem,
@@ -103,7 +98,6 @@ fn main() -> Result<()> {
         SubCommand::Images => print_available_images()?,
         SubCommand::Rmi(r) => delete_image(&r.image_hash)?,
         SubCommand::Exec(exec) => exec_command_in_container(&exec.container_id, &exec.command)?,
-        _ => (),
     };
 
     Ok(())

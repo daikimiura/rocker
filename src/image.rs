@@ -2,7 +2,7 @@ use super::{
     container::fetch_running_containers, db::downloaded_images_key, ROCKER_DB_PATH,
     ROCKER_IMAGES_PATH, ROCKER_TMP_PATH,
 };
-use std::{fs, io::Write, net::ToSocketAddrs};
+use std::{fs, io::Write};
 
 use anyhow::{anyhow, Result};
 use dkregistry::v2::{
@@ -10,7 +10,7 @@ use dkregistry::v2::{
     Client,
 };
 use flate2::read::GzDecoder;
-use futures::{future::join_all, join};
+use futures::future::join_all;
 use tar::Archive;
 
 struct Image {
@@ -47,7 +47,7 @@ pub async fn download_image_if_needed(
     let image_hash = s2_manifest.manifest_spec.config().digest[7..=18].to_string();
 
     let db = sled::open(ROCKER_DB_PATH).unwrap();
-    if (!is_image_already_downloaded(&db, &image_hash)?) {
+    if !is_image_already_downloaded(&db, &image_hash)? {
         let image_layer_digests = s2_manifest.get_layers();
         println!("Downloading image {}:{}...", image_name, tag);
 
@@ -111,7 +111,7 @@ async fn download_layers_blob(
     image_layer_digests: &Vec<String>,
 ) -> Result<()> {
     let image_layers_tar_path = format!("{}{}{}", ROCKER_TMP_PATH, "/", image_hash);
-    fs::create_dir_all(&image_layers_tar_path);
+    fs::create_dir_all(&image_layers_tar_path)?;
     let mut pull_tasks = Vec::new();
     for layer_digest in image_layer_digests {
         println!("Pulling layer: {}", &layer_digest[7..=18]);
@@ -119,7 +119,7 @@ async fn download_layers_blob(
         let tar_path = image_layers_tar_path.clone();
         pull_tasks.push(async move {
             let blob = c.get_blob(image_name, &layer_digest).await;
-            let mut file = fs::File::create(format!(
+            let file = fs::File::create(format!(
                 "{}{}{}{}",
                 &tar_path,
                 "/",
@@ -160,7 +160,7 @@ fn extract_layers(image_hash: &str, image_layer_digests: &Vec<String>) -> Result
             &layer_digest[7..=18],
             "/fs"
         );
-        archive.unpack(dst_path);
+        archive.unpack(dst_path)?;
     }
     Ok(())
 }
@@ -203,9 +203,9 @@ fn fetch_available_images() -> Result<Vec<Image>> {
 }
 
 pub fn delete_image(image_hash: &str) -> Result<()> {
-    let mut is_used_by_container = false;
+    let _is_used_by_container = false;
     for container in fetch_running_containers()? {
-        if (container.image_hash == image_hash) {
+        if container.image_hash == image_hash {
             println!("image is being used by running container: {}", container.id);
             return Ok(());
         }

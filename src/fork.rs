@@ -1,7 +1,7 @@
 use std::process::exit;
 
 use nix::{
-    sys::wait::{waitpid, WaitStatus},
+    sys::wait::waitpid,
     unistd::{fork, ForkResult},
 };
 

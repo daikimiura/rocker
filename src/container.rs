@@ -3,7 +3,6 @@ use std::{
     ffi::CString,
     fs::{self, create_dir_all},
     path::Path,
-    str::from_utf8,
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -11,12 +10,10 @@ use dkregistry::v2::manifest::ManifestSchema2;
 use hex::encode;
 use nix::{
     fcntl::{open, OFlag},
-    libc::mount,
     mount::{umount, MsFlags},
     sched::{clone, setns, CloneFlags},
     sys::{signal::Signal, wait::waitpid},
-    unistd::{chdir, chroot, close, execv, getpid, sethostname},
-    NixPath,
+    unistd::{chdir, chroot, execv},
 };
 use rand::Rng;
 
@@ -26,8 +23,8 @@ use crate::{
         container_commands_key, container_image_hashes_key, container_pids_key,
         downloaded_images_key, used_ip_addresses_key, veth_ip_addresses_key,
     },
-    image::{self, download_image_if_needed},
-    network::{delete_netns, run_in_network_namespace, setup_netns, setup_veths},
+    image::download_image_if_needed,
+    network::{delete_netns, setup_netns, setup_veths},
 };
 
 pub struct Container {
@@ -61,19 +58,20 @@ pub async fn run_container(
 
     let cb = Box::new(|| {
         let netns_path = format!("{}/{}", ROCKER_NETNS_PATH, &format!("ns-{}", &container_id));
-        setns_by_fd_path(&netns_path, CloneFlags::CLONE_NEWNET);
+        setns_by_fd_path(&netns_path, CloneFlags::CLONE_NEWNET).unwrap();
 
-        nix::unistd::sethostname(&container_id);
+        nix::unistd::sethostname(&container_id).unwrap();
 
-        chroot(Path::new(&mnt_path));
-        chdir("/");
+        chroot(Path::new(&mnt_path)).unwrap();
+        chdir("/").unwrap();
 
-        mount_container_fs();
+        mount_container_fs().unwrap();
 
         execv(
             &CString::new((&command).to_string()).unwrap(),
             &[CString::new((&command).to_string()).unwrap()],
-        );
+        )
+        .unwrap();
 
         return 0;
     });
@@ -91,10 +89,10 @@ pub async fn run_container(
         container_image_hashes_key(&container_id),
         image_hash.as_str(),
     )?;
-    db.insert(container_pids_key(&container_id), pid.to_string().as_str());
+    db.insert(container_pids_key(&container_id), pid.to_string().as_str())?;
     drop(db);
 
-    create_cgroup(&container_id, pid.as_raw() as u32, mem, cpus, pids);
+    create_cgroup(&container_id, pid.as_raw() as u32, mem, cpus, pids)?;
     waitpid(pid, None)?;
     println!("Container {} done", &container_id);
 
@@ -189,20 +187,8 @@ fn umount_overlay_fs(container_id: &String) -> Result<()> {
     Ok(())
 }
 
-fn prepare_and_execute_container(
-    mem: Option<i32>,
-    swap: Option<i32>,
-    pids: Option<i32>,
-    cpus: Option<i32>,
-    container_id: &String,
-    image_hash: &String,
-    command: String,
-) -> Result<()> {
-    Ok(())
-}
-
 fn mount_container_fs() -> Result<()> {
-    create_dir_all("/proc");
+    create_dir_all("/proc")?;
     nix::mount::mount::<str, Path, [u8], str>(
         Some("proc"),
         Path::new("/proc"),
@@ -230,7 +216,7 @@ fn mount_container_fs() -> Result<()> {
     )
     .unwrap();
 
-    create_dir_all("/dev/pts");
+    create_dir_all("/dev/pts")?;
     nix::mount::mount::<str, Path, [u8], str>(
         Some("devpts"),
         Path::new("/dev/pts"),
@@ -240,7 +226,7 @@ fn mount_container_fs() -> Result<()> {
     )
     .unwrap();
 
-    create_dir_all("/sys");
+    create_dir_all("/sys")?;
     nix::mount::mount::<str, Path, [u8], str>(
         Some("sysfs"),
         Path::new("/sys"),
@@ -315,7 +301,7 @@ pub fn exec_command_in_container(container_id: &str, command: &str) -> Result<()
     let container_pid_res = db.get(container_pids_key(&container_id))?;
     drop(db);
 
-    if (container_pid_res.is_none()) {
+    if container_pid_res.is_none() {
         println!("container not found: {}", &container_id);
         return Ok(());
     }
@@ -332,11 +318,11 @@ pub fn exec_command_in_container(container_id: &str, command: &str) -> Result<()
         let pidns_path = format!("{}/pid", &ns_base_path);
         let utsns_path = format!("{}/uts", &ns_base_path);
         let netns_path = format!("{}/{}", ROCKER_NETNS_PATH, &format!("ns-{}", &container_id));
-        setns_by_fd_path(&ipcns_path, CloneFlags::CLONE_NEWIPC);
-        setns_by_fd_path(&mntns_path, CloneFlags::CLONE_NEWNS);
-        setns_by_fd_path(&pidns_path, CloneFlags::CLONE_NEWPID);
-        setns_by_fd_path(&utsns_path, CloneFlags::CLONE_NEWUTS);
-        setns_by_fd_path(&netns_path, CloneFlags::CLONE_NEWNET);
+        setns_by_fd_path(&ipcns_path, CloneFlags::CLONE_NEWIPC).unwrap();
+        setns_by_fd_path(&mntns_path, CloneFlags::CLONE_NEWNS).unwrap();
+        setns_by_fd_path(&pidns_path, CloneFlags::CLONE_NEWPID).unwrap();
+        setns_by_fd_path(&utsns_path, CloneFlags::CLONE_NEWUTS).unwrap();
+        setns_by_fd_path(&netns_path, CloneFlags::CLONE_NEWNET).unwrap();
 
         let execv_cb = Box::new(|| {
             nix::unistd::sethostname(&container_id).unwrap();
@@ -346,7 +332,8 @@ pub fn exec_command_in_container(container_id: &str, command: &str) -> Result<()
             execv(
                 &CString::new((&command).to_string()).unwrap(),
                 &[CString::new((&command).to_string()).unwrap()],
-            );
+            )
+            .unwrap();
             return 0;
         });
 
@@ -376,13 +363,14 @@ pub fn exec_command_in_container(container_id: &str, command: &str) -> Result<()
     )
     .with_context(|| "fialed to clone")?;
 
+    let cgroup_path = fetch_cgroup_path(container_id);
+    add_process_to_cgroup(&cgroup_path, pid.as_raw() as u32)?;
     waitpid(pid, None)?;
 
     Ok(())
 }
 
 fn setns_by_fd_path(path: &str, nstype: CloneFlags) -> Result<()> {
-    dbg!(path);
     let mut oflag = OFlag::empty();
     oflag.insert(OFlag::O_RDONLY);
     oflag.insert(OFlag::O_EXCL);
