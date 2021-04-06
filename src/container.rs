@@ -43,7 +43,7 @@ pub async fn run_container(
     registry_password: Option<String>,
     command: String,
 ) -> Result<()> {
-    let container_id = create_container_id();
+    let container_id = create_container_id()?;
     let (image_hash, manifest) =
         download_image_if_needed(&image_name, registry_username, registry_password).await?;
     create_container_directories(&container_id)?;
@@ -123,11 +123,26 @@ pub async fn run_container(
     Ok(())
 }
 
-fn create_container_id() -> String {
-    let random_bytes = rand::thread_rng().gen::<[u8; 6]>();
-    let string = encode(random_bytes);
-    println!("new container ID: {}", string);
-    string
+fn create_container_id() -> Result<String> {
+    let mut random_bytes = rand::thread_rng().gen::<[u8; 6]>();
+    let mut container_id = encode(random_bytes);
+    let mut is_ok = false;
+    let db = sled::open(ROCKER_DB_PATH).unwrap();
+
+    while !is_ok {
+        match db.get(container_image_hashes_key(&container_id))? {
+            Some(_) => {
+                random_bytes = rand::thread_rng().gen::<[u8; 6]>();
+                container_id = encode(random_bytes);
+            }
+            None => {
+                is_ok = true;
+            }
+        };
+    }
+
+    println!("new container ID: {}", &container_id);
+    Ok(container_id)
 }
 
 fn create_container_directories(container_id: &String) -> Result<()> {
