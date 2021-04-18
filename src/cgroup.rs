@@ -1,4 +1,4 @@
-use std::{fs::OpenOptions, io::Write, time::Duration};
+use std::{fs::OpenOptions, io::Write, path::Path, time::Duration};
 
 use anyhow::{anyhow, Result};
 use dbus::{
@@ -35,17 +35,45 @@ pub fn create_cgroup(
     Ok(())
 }
 
-pub fn add_process_to_cgroup(path: &str, pid: u32) -> Result<()> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .append(true)
-        .open(format!("{}/cgroup.procs", path))?;
-    write!(file, "{}", pid)?;
+pub fn add_process_to_cgroup(container_id: &str, pid: u32) -> Result<()> {
+    // Check if using cgroup v2.
+    // https://github.com/opencontainers/runc/blob/master/docs/cgroup-v2.md
+    if Path::new("/sys/fs/cgroup/cgroup.controllers").exists() {
+        let path = fetch_cgroup_v2_scope_path(container_id);
+        let mut file = OpenOptions::new()
+            .write(true)
+            .append(true)
+            .open(format!("{}/cgroup.procs", path))?;
+        write!(file, "{}", pid)?;
+    } else {
+        let paths = fetch_cgourp_v1_resource_paths(container_id);
+        for path in paths {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .append(true)
+                .open(format!("{}/cgroup.procs", path))?;
+            write!(file, "{}", pid)?;
+        }
+    }
+
     Ok(())
 }
 
-pub fn fetch_cgroup_path(container_id: &str) -> String {
+fn fetch_cgroup_v2_scope_path(container_id: &str) -> String {
     format!("/sys/fs/cgroup/system.slice/rocker-{}.scope", container_id)
+}
+
+fn fetch_cgourp_v1_resource_paths(container_id: &str) -> Vec<String> {
+    // Rocker only supports "cpu", "memory", and "pids".
+    let resources = ["cpu", "memory", "pids"];
+    let mut paths: Vec<String> = Vec::new();
+    for r in resources.iter() {
+        paths.push(format!(
+            "/sys/fs/cgroup/{}/system.slice/rocker-{}.scope",
+            r, container_id
+        ));
+    }
+    paths
 }
 
 fn build_properties(

@@ -18,7 +18,7 @@ use nix::{
 use rand::Rng;
 
 use crate::{
-    cgroup::{add_process_to_cgroup, create_cgroup, fetch_cgroup_path},
+    cgroup::{add_process_to_cgroup, create_cgroup},
     db::{
         container_commands_key, container_image_hashes_key, container_pids_key,
         downloaded_images_key, used_ip_addresses_key, veth_ip_addresses_key,
@@ -352,34 +352,26 @@ pub fn exec_command_in_container(container_id: &str, command: &str) -> Result<()
             return 0;
         });
 
-        let mut execv_stack = Box::new([0; CONTAINER_STACK_SIZE]);
+        let ref mut execv_stack: [u8; CONTAINER_STACK_SIZE] = [0; CONTAINER_STACK_SIZE];
         let execv_pid = clone(
             execv_cb,
-            &mut *execv_stack,
+            execv_stack,
             CloneFlags::empty(),
             Some(Signal::SIGCHLD as i32),
         )
         .with_context(|| "fialed to clone")
         .unwrap();
 
-        let cgroup_path = fetch_cgroup_path(container_id);
-        add_process_to_cgroup(&cgroup_path, execv_pid.as_raw() as u32).unwrap();
+        add_process_to_cgroup(container_id, execv_pid.as_raw() as u32).unwrap();
         waitpid(execv_pid, None).unwrap();
 
         return 0;
     });
 
-    let mut stack = Box::new([0; CONTAINER_STACK_SIZE]);
-    let pid = clone(
-        cb,
-        &mut *stack,
-        CloneFlags::empty(),
-        Some(Signal::SIGCHLD as i32),
-    )
-    .with_context(|| "fialed to clone")?;
+    let ref mut stack: [u8; CONTAINER_STACK_SIZE] = [0; CONTAINER_STACK_SIZE];
+    let pid = clone(cb, stack, CloneFlags::empty(), Some(Signal::SIGCHLD as i32))
+        .with_context(|| "fialed to clone")?;
 
-    let cgroup_path = fetch_cgroup_path(container_id);
-    add_process_to_cgroup(&cgroup_path, pid.as_raw() as u32)?;
     waitpid(pid, None)?;
 
     Ok(())
