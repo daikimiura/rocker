@@ -4,7 +4,6 @@
 
 <img width="940" alt="スクリーンショット 2021-04-08 1 28 27" src="https://user-images.githubusercontent.com/32577081/113901345-ba244980-9809-11eb-873e-c7146a4747a0.png">
 
-<br />
 
 # Usage
 - Run a container
@@ -34,17 +33,19 @@ rocker images
 ```
 rocker exec <container-id> <command>
 ```
+<img width="1052" alt="スクリーンショット 2021-04-18 15 41 40" src="https://user-images.githubusercontent.com/32577081/115136714-9a3c2380-a05c-11eb-8198-6ef1fa78e644.png">
+
+
 - Delete an image
 ```
 rocker rmi <image-hash>
 ``` 
-<br />
+
 
 # Requisites
 
 - [libdbus](https://dbus.freedesktop.org/releases/dbus/) (1.6 or higher)
-- cgroup v2
-<br />
+
 
 # Build
 `$ cargo build`
